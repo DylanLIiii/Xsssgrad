@@ -9,27 +9,57 @@ class Tensor:
         self.data = np.asarray(data)# accept data, we use numpy here
         self.grad = None  # gradient
         self.data = np.atleast_1d(data)
-        self.generator = None # generator is a Function we define
+        self._generator = None # generator is a Function we define
+        self.priority = 0
+        
+        @property
+        def generator(self):
+            return self._generator
+        
+        @generator.setter
+        def generator(self, generator):
+            self._generator = generator
+            self.priority = generator.priority + 1 #if generator is not None else 0
         
     def backward(self):
+        if self.grad is None:
+            self.grad = np.ones_like(self.data)
+            
         funcs = []
-        funcs.append(self.generator)
+        
+        # sort 
+        func_set = set()
+        
+        def add_func(f):
+            if f not in func_set:
+                func_set.add(f)
+                funcs.append(f)
+                funcs.sort(key=lambda x: x.priority)
+                
+        add_func(self._generator)
         
         while funcs:
             
             generator = funcs.pop()
             if generator is None: break
 
-            inputs, outputs = generator.inputs, generator.outputs
-            gys = [o.grad for o in outputs]
+            xs, ys = generator.xs, generator.ys
+            gys = [o.grad for o in ys]
             gxs = generator.backward(*gys)
             
             if not isinstance(gxs, tuple):
                 gxs = (gxs,)
-            for input, gx in zip(inputs, gxs): 
-                input.grad = gx
-                if input.generator is not None:
-                        funcs.append(input.generator)
+            for x, gx in zip(xs, gxs): 
+                if x.grad is None: 
+                    x.grad = gx
+                x.grad = x.grad + gx # accumulate gradient when we call multiple backward
+                if x.generator is not None:
+                        add_func(x.generator)
+                        
+        def zero_grad():
+            self.grad = None
+            '''if self.generator is not None:
+                self.generator.zero_grad()'''
                         
                         
     def __repr__(self):
@@ -46,19 +76,23 @@ class Function:
     Abstract methods are methods that have a declaration but do not have an implementation.
     """
     
-    def __call__(self, *inputs):
+    def __call__(self, *xs):
 
-        self.inputs = inputs 
-        ys = self.forward(*inputs) ##here we directly define the forward of inputs, when we call, then we do a forward, in Pytorch, it's the same
+        self.xs = xs 
+        ys = self.forward(*xs) ##here we directly define the forward of xs, when we call, then we do a forward, in Pytorch, it's the same
         if not isinstance(ys, tuple):
             ys = (ys,)
-        self.outputs = ys
-        for y in self.outputs: # always maniplate on defined object 
-            y.generator = self
-            
-        return self.outputs if (len(self.outputs)>1) else self.outputs[0] #simple process
+        self.ys = ys
+        self.priority = max([x.priority for x in self.xs])
         
-    def forward(self, inputs): 
+        
+        for y in self.ys: # always maniplate on defined object 
+            y.generator = self
+        
+            
+        return self.ys if (len(self.ys)>1) else self.ys[0] #simple process
+        
+    def forward(self, xs): 
         raise NotImplementedError #his is a common practice in Python when defining methods in a base class that are intended to be overridden in subclasses.
     
     def backward(self, gys):
@@ -75,7 +109,7 @@ class Mul(Function):
         return Tensor(x0.data * x1.data)
     
     def backward(self, gys):
-        x0, x1 = self.inputs
+        x0, x1 = self.xs
         return x0.data * gys, x1.data * gys
         
     
