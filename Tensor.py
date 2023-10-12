@@ -4,35 +4,40 @@ import numpy as np
 
 class Tensor: 
     def __init__(self, data) -> None:
-        """
-         Initialize the object with data. This is the method that must be called before any operations that are performed on the object such as __init__ and __setstate__
-         
-         @param data - The data to be used for the optimizer
-         
-         We use np.atleast_1d() to make sure the data shape is right
-         because when you pass a scaler to np.array(), the shape will be None.
-         
-         @return None The optimizer is initialized with the data and the
-        """
+
 
         self.data = np.asarray(data)# accept data, we use numpy here
         self.grad = None  # gradient
         self.data = np.atleast_1d(data)
-        self.generator = None #g generator is a Function we define
+        self.generator = None # generator is a Function we define
         
-        def __str__(self):
-            """
-            Return a string representation of the tensor.
-            """
-            return f"Tensor({self.data}), Shape({self.data.shape})"
+    def backward(self):
+        funcs = []
+        funcs.append(self.generator)
         
-        def backward(self, grad_in):
-            generator = self.generator 
-            if generator is not None:
-                inputs = generator.inputs
-                inputs.grad = generator.backward(grad_in)
-                inputs.backward()
+        while funcs:
             
+            generator = funcs.pop()
+            if generator is None: break
+
+            inputs, outputs = generator.inputs, generator.outputs
+            gys = [o.grad for o in outputs]
+            gxs = generator.backward(*gys)
+            
+            if not isinstance(gxs, tuple):
+                gxs = (gxs,)
+            for input, gx in zip(inputs, gxs): 
+                input.grad = gx
+                if input.generator is not None:
+                        funcs.append(input.generator)
+                        
+                        
+    def __repr__(self):
+        return self.__str__()              
+                    
+    def __str__(self):
+        return f"Tensor({self.data}), Shape({self.data.shape})"
+        
         
         
 class Function: 
@@ -41,43 +46,41 @@ class Function:
     Abstract methods are methods that have a declaration but do not have an implementation.
     """
     
-    def __call__(self, inputs, *args: Any, **kwds: Any) -> Any:
-        """
-         Calls the forward function. This is the method that should be called by the user.
-         
-         @param inputs - The inputs to the network. It should be a list of numpy arrays
-         @param args - Positional arguments passed to the network
-         @param kwds - Keyword arguments passed to the
-        """
-        
+    def __call__(self, *inputs):
+
         self.inputs = inputs 
-        y = self.forward(inputs)
-        y.generator = self# here we directly define the forward of inputs, when we call, then we do a forward, in Pytorch, it's the same
-    
+        ys = self.forward(*inputs) ##here we directly define the forward of inputs, when we call, then we do a forward, in Pytorch, it's the same
+        if not isinstance(ys, tuple):
+            ys = (ys,)
+        self.outputs = ys
+        for y in self.outputs: # always maniplate on defined object 
+            y.generator = self
+            
+        return self.outputs if (len(self.outputs)>1) else self.outputs[0] #simple process
+        
     def forward(self, inputs): 
-        """
-         Forward function. This is called by the model to get the output of the model.
-         
-         @param inputs - A list of inputs to the model. Each input is a tuple ( x y)
-         
-        """
         raise NotImplementedError #his is a common practice in Python when defining methods in a base class that are intended to be overridden in subclasses.
     
-    def backward(self, grad_out):
-        """
-         Backward pass for the layer. This is called in the end of the forward pass to get the gradients for the output layer
-         
-         @param grad_out - Gradient tensor with respect to
-        """
+    def backward(self, gys):
         raise NotImplementedError
         
+class Add(Function):
         
-class Square(Function):
+        def forward(self, x0, x1):
+            return Tensor(x0.data + x1.data)
+        
+class Mul(Function):
     
-    def forward(self, inputs): 
-        y = self.inputs.data ** 2
-        return Tensor(y)
+    def forward(self, x0, x1):
+        return Tensor(x0.data * x1.data)
     
-    def backward(self, grad_in):
-        # grad_in is the grad from last layer
-        return 2*self.inputs.data * grad_in
+    def backward(self, gys):
+        x0, x1 = self.inputs
+        return x0.data * gys, x1.data * gys
+        
+    
+def add(x0, x1):
+    return Add()(x0, x1)
+
+def mul(x0, x1):
+    return Mul()(x0, x1)
